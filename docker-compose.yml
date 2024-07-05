@@ -1,0 +1,36 @@
+version: "3"
+services:
+  db:
+    image: postgres
+    restart: always
+    environment:
+      PGDATA: "/var/lib/postgresql/data/pgdata"
+      POSTGRES_USER: "diadoc"
+      POSTGRES_PASSWORD: "diadoc"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - "$PWD/init.sql:/docker-entrypoint-initdb.d/init.sql"
+    expose:
+      - 5432
+    ports:
+      - 5432:5432
+  elasticsearch:
+    image: elasticsearch:8.14.1
+    environment:
+      ES_JAVA_OPTS: -Xms1g -Xmx1g
+    volumes:
+      - ./elasticsearch/elastic.config.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro,Z
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    command: elasticsearch -E network.host=0.0.0.0
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+  kibana:
+    image: kibana:8.14.1
+    ports:
+      - "5601:5601"
+    links:
+      - elasticsearch
+volumes:
+  pgdata:
+  elasticsearch-data:
