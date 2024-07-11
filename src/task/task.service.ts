@@ -1,99 +1,56 @@
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
-import { CreateTaskDto } from './dto/create-task.dto';
+import { Injectable } from '@nestjs/common';
 import { Task } from './entities/task.entity';
 import { Cron } from '@nestjs/schedule';
 import { PendalLogger } from 'src/pendal-logger/pendal-logger.service';
 import { TaskType } from './types/type.task';
 import { BidService } from 'src/bid/bid.service';
-import { TaskState } from './types/status.task';
 import { DiadocService } from 'src/diadoc/diadoc.service';
-import { writeFileSync } from 'fs';
-import { IOnecCreateResultData } from 'src/onec/types/ut-create-data';
-import { IDiadocMessage } from 'src/diadoc/types/message';
-import { Bid } from 'src/bid/entities/bid.entity';
-import { PendalException, PendalExceptionType } from 'src/lib/pendal-exception';
+import {
+  IOnecCreateResultData,
+  IOnecCreateResultReportData,
+} from 'src/onec/types/ut-create-data';
+import getDocumentState from './helpers/getDocumentState';
+import sendBidToUT from './helpers/sendToUt';
+import sendBidToOnec from './helpers/sendBidToOnec';
+import logTaskObj from './methods/logTaskObj';
+import createBayerCheck from './methods/createBayerCheck';
+import createSailerCheck from './methods/createSailerCheck';
+import writeBid from './helpers/writeBid';
+import createBayerSignCheck from './methods/createBayerSignCheck';
+import createSendToOnec from './methods/createSendToOnec';
+import createSailerSignCheck from './methods/createSailerSignCheck';
+import createDealFinished from './methods/createDealFinished';
+import checkReadyDocumentState from './helpers/checkReadyDocumentState';
 
 @Injectable()
 export class TaskService {
   taskLock: boolean = false;
   constructor(
-    private bids: BidService,
-    private diadoc: DiadocService,
-    private logger: PendalLogger,
+    readonly bids: BidService,
+    readonly diadoc: DiadocService,
+    readonly logger: PendalLogger,
   ) {}
-
-  async create(dto: CreateTaskDto): Promise<Task> {
-    try {
-      const result = await Task.create(dto);
-      return result;
-    } catch (e) {
-      throw e;
-    }
-  }
-
-  logTask(task: Task, message: string = null): void {
-    if (!message) {
-      this.logger.logJson(
-        `Обработка задачи с типом  ${TaskType[task.type]} к заявке ${task.bidId}`,
-        task.bidId,
-        task.toJSON(),
-      );
-    } else {
-      this.logger.logJson(message, task.bidId, task);
-    }
-  }
-
-  logTaskObj(task: Task, obj: Object, message: string = null): void {
-    if (!message) {
-      this.logger.logJson(
-        `Обработка задачи с типом  ${TaskType[task.type]} к заявке ${task.bidId}`,
-        task.bidId,
-        obj,
-      );
-    } else {
-      this.logger.logJson(message, task.bidId, obj);
-    }
-  }
-
-  async sendBidToUT(bid: Bid): Promise<IOnecCreateResultData> {
-    const response = await fetch('http://localhost:3000/onec/createUpdUt', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8',
-      },
-      body: JSON.stringify(bid.toJSON()),
-    });
-    return response.json();
-  }
 
   async checkTask(task: Task) {
     try {
-      // this.logTask(task);
       if (task.type === TaskType.NewBid) {
         const bid = await this.bids.findOne(task.bidId);
-        this.create({
-          bidId: bid.bidId,
-          status: TaskState.New,
-          type: TaskType.CheckSeller,
-          data: bid.data,
-        });
-        this.create({
-          bidId: bid.bidId,
-          status: TaskState.New,
-          type: TaskType.CheckBayer,
-          data: bid.data,
-        });
-        this.writeBid(bid);
+        createBayerCheck(bid);
+        createSailerCheck(bid);
+        writeBid(bid);
         await task.destroy();
       } else if (task.type === TaskType.CheckSeller) {
         const bid = await this.bids.findOne(task.bidId);
-        const diadocOrg = await this.diadoc.GetOrganization(bid.sailerInn);
+        const diadocOrg = await this.diadoc.getOrganization(bid.sailerInn);
         bid.sailerOrgIdGuid = diadocOrg.OrgIdGuid;
         bid.sailerBoxId = diadocOrg.Boxes[0].BoxIdGuid;
         bid.sailerFnsParticipantId = diadocOrg.FnsParticipantId;
+        bid.sailerName = diadocOrg.FullName;
+        bid.sailerDiadocCheck = true;
         await bid.save();
-        this.writeBid(bid);
-        this.logTaskObj(
+        writeBid(bid);
+        logTaskObj(
+          this,
           task,
           diadocOrg,
           `Уточняем данные покупателя ${TaskType[task.type]}`,
@@ -101,13 +58,16 @@ export class TaskService {
         await task.destroy();
       } else if (task.type == TaskType.CheckBayer) {
         const bid = await this.bids.findOne(task.bidId);
-        const diadocOrg = await this.diadoc.GetOrganization(bid.bayerInn);
+        const diadocOrg = await this.diadoc.getOrganization(bid.bayerInn);
         bid.bayerOrgIdGuid = diadocOrg.OrgIdGuid;
         bid.bayerBoxId = diadocOrg.Boxes[0].BoxIdGuid;
         bid.bayerFnsParticipantId = diadocOrg.FnsParticipantId;
+        bid.bayerName = diadocOrg.FullName;
+        bid.bayerDiadocCheck = true;
         await bid.save();
-        this.writeBid(bid);
-        this.logTaskObj(
+        writeBid(bid);
+        logTaskObj(
+          this,
           task,
           diadocOrg,
           `Уточняем данные поставщика ${TaskType[task.type]}`,
@@ -115,71 +75,124 @@ export class TaskService {
         await task.destroy();
       } else if (task.type === TaskType.CheckPay) {
         const bid = await this.bids.findOne(task.bidId);
+        if (!(bid.bayerDiadocCheck && bid.sailerDiadocCheck)) {
+          this.logger.log(`Контрагенты не проверенны`);
+          return;
+        }
         bid.payDocNumber = JSON.parse(task.data).payDoc;
-        const data = await this.sendBidToUT(bid);
+        const data = await sendBidToUT(bid);
         bid.bayerMessageId = data.messageId;
-        bid.updNumber = data.updNumber;
-        this.create({
-          bidId: bid.bidId,
-          status: TaskState.New,
-          type: TaskType.CheckDiadocBayer,
-          data: JSON.stringify(data),
-        });
+        bid.bayerUpdNumber = data.updNumber;
         await bid.save();
-        this.writeBid(bid);
-        this.logTaskObj(
+        createBayerSignCheck(bid, data);
+        await task.destroy();
+        logTaskObj(
+          this,
           task,
           data,
           `Отправляем данные об оплате и заявку в УТ `,
         );
-        await task.destroy();
+        writeBid(bid);
       } else if (task.type === TaskType.CheckDiadocBayer) {
         const data: IOnecCreateResultData = JSON.parse(task.data);
-        const result = (await this.diadoc.getDocState(data)) as IDiadocMessage;
-        const document = result.Entities.find((doc) => {
-          return (
-            doc.DocumentInfo?.DocumentType === 'UniversalTransferDocument' &&
-            doc.DocumentInfo.DocumentNumber === data.updNumber
-          );
-        });
-        writeFileSync(
-          `mon/getmessage.${task.bidId}.json`,
-          JSON.stringify(result, null, 2),
+        const bid = await this.bids.findOne(task.bidId);
+        const status = await getDocumentState(
+          this,
+          data.boxId,
+          data.messageId,
+          data.updNumber,
         );
-        if (
-          document.DocumentInfo.DocflowStatus.PrimaryStatus.StatusText ===
-          'Документооборот завершен'
-        ) {
-          this.logTaskObj(
+
+        if (status === `Документооборот завершен`) {
+          logTaskObj(
+            this,
             task,
-            {
-              status:
-                document.DocumentInfo.DocflowStatus.PrimaryStatus.StatusText,
-              ...data,
-            },
+            data,
             `Документооборот с покупателем завершен`,
           );
+          bid.bayerSign = true;
+          await bid.save();
+          createSendToOnec(bid);
           await task.destroy();
-          const bid = await this.bids.findOne(task.bidId);
+        } else {
+          this.logger.log(`Статус документа ${task.bidId} ${status}`);
+        }
+      } else if (task.type === TaskType.SendOnecComplete) {
+        const bid = await this.bids.findOne(task.bidId);
+        const data = await sendBidToOnec(bid);
+        bid.sailerMessageId = data.messageId;
+        bid.sailerUpdNumber = data.updNumber;
+        bid.sailerReportNumber = data.reportNumber;
+        createSailerSignCheck(bid, data);
+        await bid.save();
+        writeBid(bid);
+        logTaskObj(
+          this,
+          task,
+          data,
+          `Отправляем данные данные о подписании в 1С`,
+        );
+        await task.destroy();
+      } else if (task.type === TaskType.CheckDiadocSailer) {
+        const data: IOnecCreateResultReportData = JSON.parse(task.data);
+        const bid = await this.bids.findOne(task.bidId);
+        let status = null;
+        let statusReport = null;
+        if (!bid.sailerSign) {
+          status = await getDocumentState(
+            this,
+            data.boxId,
+            data.messageId,
+            data.updNumber,
+          );
+          if (status === 'Документооборот завершен') {
+            logTaskObj(this, task, data, `Поставщиком подписан УПД`);
+            bid.sailerSign = true;
+            await bid.save();
+          }
+        }
+        if (!bid.sailerReportSign) {
+          statusReport = await getDocumentState(
+            this,
+            data.boxId,
+            data.messageId,
+            data.reportNumber,
+          );
+          if (statusReport === 'Подписан контрагентом') {
+            logTaskObj(this, task, data, `Поставщиком подписан отчёт`);
+            bid.sailerReportSign = true;
+            await bid.save();
+          }
+        }
+        if (bid.sailerSign && bid.sailerReportSign) {
+          createDealFinished(bid);
+          await task.destroy();
+          logTaskObj(
+            this,
+            task,
+            data,
+            `Документооборот с поставщиком завершен`,
+          );
         } else {
           this.logger.log(
-            `Статус документа ${task.bidId} ${document.DocumentInfo.DocflowStatus.PrimaryStatus.StatusText}`,
+            `Статус документа ${task.bidId} УПД: ${status} Отчёт Агента: ${statusReport}`,
           );
         }
-      } else if (task.type === TaskType.CheckDiadoc) {
-      } else {
+        writeBid(bid);
+      } else if (task.type === TaskType.DealFinished) {
+        const bid = await this.bids.findOne(task.bidId);
+        await task.destroy();
+        writeBid(bid);
+        logTaskObj(this, task, bid, `Сделка завершена`);
+        bid.destroy();
       }
     } catch (e) {
       this.logger.errorJson(
         `Ошибка при обработке задачи с типом ${TaskType[task.type]}`,
         task.bidId,
-        { message: e.message },
+        { message: e.message, data: e?.data },
       );
     }
-  }
-
-  writeBid(bid) {
-    writeFileSync(`mon/bid.${bid.bidId}.json`, JSON.stringify(bid, null, 2));
   }
 
   @Cron('*/5 * * * * *')

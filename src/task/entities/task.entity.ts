@@ -1,4 +1,4 @@
-import { Column, DataType, Table, Unique, Model } from 'sequelize-typescript';
+import { Column, DataType, Table, Model, Default } from 'sequelize-typescript';
 import { TaskState } from '../types/status.task';
 import { TaskType } from '../types/type.task';
 
@@ -10,9 +10,13 @@ export class Task extends Model<Task> {
   @Column(DataType.JSON)
   data: string;
 
-  @Column
+  @Default(0)
+  @Column(DataType.INTEGER)
+  nextCheckAfter: number;
+
+  @Column(DataType.INTEGER)
   type: TaskType;
 
-  @Column
+  @Column(DataType.INTEGER)
   status: TaskState;
 }

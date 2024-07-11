@@ -1,37 +1,49 @@
 import { Injectable } from '@nestjs/common';
 import { IUtData } from './types/ut.create-data';
-import { generateGuid, getDom } from 'src/diadoc/helpers/xml.helpers.front';
+import { generateGuid, getDom, serializeXml } from 'src/lib/xml-helpers';
 import * as moment from 'moment';
-import ourReq from './our.req';
 import { DiadocService } from 'src/diadoc/diadoc.service';
-import { IOnecCreateResultData } from './types/ut-create-data';
-import { IDiadocMessage } from 'src/diadoc/types/message';
-import { createWriteStream } from 'fs';
+import {
+  IOnecCreateResultData,
+  IOnecCreateResultReportData,
+} from './types/ut-create-data';
+import { readFile } from 'fs/promises';
+import getMyReq, { IOurReq } from 'src/lib/get-my-req';
+import { encodeWinToBase64, buffToBase64 } from './helpers/iconvHelpers';
+import { IMessage } from 'src/diadoc/diadocapi/types/Message';
+import { Bid } from 'src/bid/entities/bid.entity';
 
 @Injectable()
 export class OnecService {
-  constructor(readonly diadoc: DiadocService) {}
+  ourReq: IOurReq;
+  constructor(readonly diadoc: DiadocService) {
+    this.ourReq = getMyReq();
+  }
 
-  createUpdOur(
-    data: IUtData,
-    updNumber: string,
-    sailerFnsParticipantId: string,
-  ) {
+  createUpdOur(data: Bid, updNumber: string) {
     const rawData = JSON.parse(data.data);
     const [dom, file] = getDom();
     const getElement = (name: string): Element => dom.createElement(name);
-    file.setAttribute('ИдФайл', generateGuid());
+    file.setAttribute(
+      'ИдФайл',
+      `ON_NSCHFDOPPR_${data.sailerFnsParticipantId}_${this.ourReq.FnsParticipantId}_${moment().format('YYYYMMDD')}_${generateGuid()}`,
+    );
     file.setAttribute('ВерсФорм', '5.01');
     file.setAttribute('ВерсПрог', 'edo bitech api v0.0.1');
     const SvUchDokObor = file.appendChild(getElement('СвУчДокОбор'));
-    SvUchDokObor.setAttribute('ИдОтпр', data.bayerFnsParticipantId);
-    SvUchDokObor.setAttribute('ИдПол', sailerFnsParticipantId);
+    SvUchDokObor.setAttribute('ИдОтпр', this.ourReq.FnsParticipantId);
+    SvUchDokObor.setAttribute('ИдПол', data.sailerFnsParticipantId);
+    const SvOEDOtpr = SvUchDokObor.appendChild(getElement('СвОЭДОтпр'));
+    SvOEDOtpr.setAttribute('НаимОрг', 'АО "ПФ "СКБ Контур"');
+    SvOEDOtpr.setAttribute('ИННЮЛ', '6663003127');
+    SvOEDOtpr.setAttribute('ИдЭДО', '2BM');
+
     const document = file.appendChild(getElement('Документ'));
     document.setAttribute('КНД', '1115131');
     document.setAttribute('Функция', 'СЧФ');
     document.setAttribute('ДатаИнфПр', moment().format('DD.MM.YYYY'));
     document.setAttribute('ВремИнфПр', moment().format('HH.mm.ss'));
-    document.setAttribute('НаимЭконСубСост', ourReq.name);
+    document.setAttribute('НаимЭконСубСост', this.ourReq.name);
     // Счёт-фактура
     const SvSchFakt = document.appendChild(getElement('СвСчФакт'));
     SvSchFakt.setAttribute('НомерСчФ', updNumber);
@@ -81,7 +93,10 @@ export class OnecService {
     const SvProd = SvSchFakt.appendChild(getElement('СвПрод'));
     const IdSv = SvProd.appendChild(getElement('ИдСв'));
     const SvIuLUch = IdSv.appendChild(getElement('СвЮЛУч'));
-    SvIuLUch.setAttribute('НаимОрг', rawData.seller.name);
+    SvIuLUch.setAttribute(
+      'НаимОрг',
+      `${rawData.seller.name}(${data.sailerName})`,
+    );
     SvIuLUch.setAttribute('ИННЮЛ', data.sailerInn);
     SvIuLUch.setAttribute('КПП', data.sailerKpp);
     const Adres = SvProd.appendChild(getElement('Адрес'));
@@ -97,7 +112,10 @@ export class OnecService {
     const SvPokup = SvSchFakt.appendChild(getElement('СвПокуп'));
     const IdSvPocup = SvPokup.appendChild(getElement('ИдСв'));
     const SvIuLUchPocup = IdSvPocup.appendChild(getElement('СвЮЛУч'));
-    SvIuLUchPocup.setAttribute('НаимОрг', rawData.bayer.name);
+    SvIuLUchPocup.setAttribute(
+      'НаимОрг',
+      `${rawData.bayer.name}(${data.bayerName})`,
+    );
     SvIuLUchPocup.setAttribute('ИННЮЛ', data.bayerInn);
     SvIuLUchPocup.setAttribute('КПП', data.bayerKpp);
     const AdresPocup = SvPokup.appendChild(getElement('Адрес'));
@@ -118,13 +136,122 @@ export class OnecService {
     PodpisantType.setAttribute('ИННЮЛ', '6685215502');
     PodpisantType.setAttribute('Должн', 'Директор');
     const PodpisantFio = PodpisantType.appendChild(getElement('ФИО'));
-    PodpisantFio.setAttribute('Фамилия', '');
-    PodpisantFio.setAttribute('Имя', '');
-    PodpisantFio.setAttribute('Отчество', '');
+    PodpisantFio.setAttribute('Фамилия', 'Тестовый');
+    PodpisantFio.setAttribute('Имя', 'Подписант');
+    PodpisantFio.setAttribute('Отчество', 'Биайтех');
     return dom;
   }
 
-  async createUpdSailerCopy(data: IDiadocMessage, updNumber) {
+  createUpdOurForSailer(data: Bid, updNumber: string) {
+    const rawData = JSON.parse(data.data);
+    const [dom, file] = getDom();
+    const getElement = (name: string): Element => dom.createElement(name);
+    file.setAttribute(
+      'ИдФайл',
+      `ON_NSCHFDOPPR_${data.sailerFnsParticipantId}_${this.ourReq.FnsParticipantId}_${moment().format('YYYYMMDD')}_${generateGuid()}`,
+    );
+    file.setAttribute('ВерсФорм', '5.01');
+    file.setAttribute('ВерсПрог', 'edo bitech api v0.0.1');
+    const SvUchDokObor = file.appendChild(getElement('СвУчДокОбор'));
+    SvUchDokObor.setAttribute('ИдОтпр', this.ourReq.FnsParticipantId);
+    SvUchDokObor.setAttribute('ИдПол', data.sailerFnsParticipantId);
+    const SvOEDOtpr = SvUchDokObor.appendChild(getElement('СвОЭДОтпр'));
+    SvOEDOtpr.setAttribute('НаимОрг', 'АО "ПФ "СКБ Контур"');
+    SvOEDOtpr.setAttribute('ИННЮЛ', '6663003127');
+    SvOEDOtpr.setAttribute('ИдЭДО', '2BM');
+
+    const document = file.appendChild(getElement('Документ'));
+    document.setAttribute('КНД', '1115131');
+    document.setAttribute('Функция', 'СЧФ');
+    document.setAttribute('ДатаИнфПр', moment().format('DD.MM.YYYY'));
+    document.setAttribute('ВремИнфПр', moment().format('HH.mm.ss'));
+    document.setAttribute('НаимЭконСубСост', this.ourReq.name);
+    // Счёт-фактура
+    const SvSchFakt = document.appendChild(getElement('СвСчФакт'));
+    SvSchFakt.setAttribute('НомерСчФ', updNumber);
+    SvSchFakt.setAttribute('ДатаСчФ', moment().format('DD.MM.YYYY'));
+    SvSchFakt.setAttribute('КодОКВ', '643');
+    // Табличная часть
+    const TablSchFakt = document.appendChild(getElement('ТаблСчФакт'));
+
+    const cost = 100;
+    const row = TablSchFakt.appendChild(getElement('СведТов'));
+    row.setAttribute('НомСтр', String(1));
+    row.setAttribute('НаимТов', 'Услуги БИАЙТЕХ');
+    row.setAttribute('КолТов', String(1));
+    row.setAttribute('ЦенаТов', String(cost));
+    row.setAttribute('СтТовБезНДС', Number(cost * 0.8).toFixed(2));
+    row.setAttribute('ОКЕИ_Тов', '796');
+    row.setAttribute('НалСт', '20%');
+    row.setAttribute('СтТовУчНал', Number(cost).toFixed(2));
+
+    const Aktciz = row.appendChild(getElement('Акциз'));
+    const BezAktciz = Aktciz.appendChild(getElement('БезАкциз'));
+    BezAktciz.textContent = 'без акциза';
+
+    const SumNalLine = row.appendChild(getElement('СумНал'));
+    const SumNalInside = SumNalLine.appendChild(getElement('СумНал'));
+    SumNalInside.textContent = (cost * 0.2).toFixed(2);
+
+    const DopSvedTov = row.appendChild(getElement('ДопСведТов'));
+    DopSvedTov.setAttribute('НаимЕдИзм', 'шт');
+
+    const VsegoOpl = TablSchFakt.appendChild(getElement('ВсегоОпл'));
+    VsegoOpl.setAttribute('СтТовУчНалВсего', cost.toFixed(2));
+    const SumNalVsego = VsegoOpl.appendChild(getElement('СумНалВсего'));
+    const SumNal = SumNalVsego.appendChild(getElement('СумНал'));
+    SumNal.textContent = (cost * 0.2).toFixed(2);
+    // Продавец
+    const SvProd = SvSchFakt.appendChild(getElement('СвПрод'));
+    const IdSv = SvProd.appendChild(getElement('ИдСв'));
+    const SvIuLUch = IdSv.appendChild(getElement('СвЮЛУч'));
+    SvIuLUch.setAttribute('НаимОрг', this.ourReq.name);
+    SvIuLUch.setAttribute('ИННЮЛ', this.ourReq.bayerInn);
+    SvIuLUch.setAttribute('КПП', this.ourReq.bayerKpp);
+    const Adres = SvProd.appendChild(getElement('Адрес'));
+    const AdrRF = Adres.appendChild(getElement('АдрРФ'));
+    AdrRF.setAttribute('КодРегион', '66');
+    const BankRekv = SvProd.appendChild(getElement('БанкРекв'));
+    const SvBank = BankRekv.appendChild(getElement('СвБанк'));
+    // Платёжный документ
+    const SvPRD = SvSchFakt.appendChild(getElement('СвПРД'));
+    SvPRD.setAttribute('НомерПРД', '1');
+    SvPRD.setAttribute('ДатаПРД', moment().format('DD.MM.YYYY'));
+    // Покупатель
+    const SvPokup = SvSchFakt.appendChild(getElement('СвПокуп'));
+    const IdSvPocup = SvPokup.appendChild(getElement('ИдСв'));
+    const SvIuLUchPocup = IdSvPocup.appendChild(getElement('СвЮЛУч'));
+    SvIuLUchPocup.setAttribute(
+      'НаимОрг',
+      `${rawData.seller.name}(${data.sailerName})`,
+    );
+    SvIuLUchPocup.setAttribute('ИННЮЛ', data.sailerInn);
+    SvIuLUchPocup.setAttribute('КПП', data.sailerKpp);
+    const AdresPocup = SvPokup.appendChild(getElement('Адрес'));
+    const AdrRFPocup = AdresPocup.appendChild(getElement('АдрРФ'));
+    AdrRFPocup.setAttribute('КодРегион', '66');
+    const BankRekvPocup = SvPokup.appendChild(getElement('БанкРекв'));
+    const SvBankPocup = BankRekvPocup.appendChild(getElement('СвБанк'));
+    // ДопСв
+    const DopSvFKhZh1 = SvSchFakt.appendChild(getElement('ДопСвФХЖ1'));
+    DopSvFKhZh1.setAttribute('НаимОКВ', 'Российский рубль');
+    DopSvFKhZh1.setAttribute('ОбстФормСЧФ', '1');
+    // Подписант
+    const Podpisant = document.appendChild(getElement('Подписант'));
+    Podpisant.setAttribute('ОблПолн', '1');
+    Podpisant.setAttribute('Статус', '2');
+    Podpisant.setAttribute('ОснПолн', 'Должностные обязанности');
+    const PodpisantType = Podpisant.appendChild(getElement('ЮЛ'));
+    PodpisantType.setAttribute('ИННЮЛ', '6685215502');
+    PodpisantType.setAttribute('Должн', 'Директор');
+    const PodpisantFio = PodpisantType.appendChild(getElement('ФИО'));
+    PodpisantFio.setAttribute('Фамилия', 'Тестовый');
+    PodpisantFio.setAttribute('Имя', 'Подписант');
+    PodpisantFio.setAttribute('Отчество', 'Биайтех');
+    return dom;
+  }
+
+  async createUpdSailerCopy(data: IMessage, updNumber: string) {
     const document = data.Entities.find((doc) => {
       return (
         doc.DocumentInfo?.DocumentType === 'UniversalTransferDocument' &&
@@ -136,49 +263,106 @@ export class OnecService {
       data.MessageId,
       document.EntityId,
     );
-    return Buffer.from(await (await form.blob()).arrayBuffer());
+    return form;
   }
 
-  async createUpdSailer(dto: IUtData): Promise<IOnecCreateResultData> {
+  async createUpdSailer(dto: Bid): Promise<IOnecCreateResultData> {
     const updNumber = String(Math.floor(Math.random() * 10_000));
-    const upd = this.createUpdOur(dto, updNumber, dto.sailerFnsParticipantId);
-    const updResult = await this.diadoc.sendUpd(
-      upd,
-      dto.sailerBoxId,
+    const upd = this.createUpdOur(dto, updNumber);
+    const updBase64 = encodeWinToBase64(serializeXml(upd));
+    const updResult = await this.diadoc.sendDocs(
+      this.ourReq.BoxId,
       dto.bayerBoxId,
-      'Упд от нас покупателю отправляться будет от БИАЙТЕХ',
+      [
+        {
+          NeedReceipt: true,
+          NeedRecipientSignature: true,
+          TypeNamedId: 'UniversalTransferDocument',
+          Function: 'СЧФ',
+          Version: 'utd820_05_01_02_hyphen',
+          Comment: 'УПД для покупателя отправляться будет от БИАЙТЕХ',
+          SignedContent: {
+            Content: updBase64,
+            SignWithTestSignature: true,
+          },
+        },
+      ],
     );
-    try {
-      const updCopy = await this.createUpdSailerCopy(updResult, updNumber);
-      this.diadoc.CreatePdf(
-        dto.bayerBoxId,
-        dto.sailerBoxId,
-        updCopy,
-        'Копия УПД для поставщика отправляться будет от БИАЙТЕХ',
-      );
-    } catch (e) {
-      console.log(e.message);
-    }
+    const updCopy = await this.createUpdSailerCopy(updResult, updNumber);
+    const updCopyBase64 = buffToBase64(updCopy);
+    const updCopyResult = await this.diadoc.sendDocs(
+      this.ourReq.BoxId,
+      dto.sailerBoxId,
+      [
+        {
+          NeedReceipt: false,
+          NeedRecipientSignature: false,
+          TypeNamedId: 'Nonformalized',
+          Comment: 'Копия УПД для поставщика отправляться будет от БИАЙТЕХ',
+          SignedContent: {
+            Content: updCopyBase64,
+            SignWithTestSignature: true,
+          },
+          Metadata: [
+            { Key: 'FileName', Value: 'Копия_Упд.pdf' },
+            { Key: 'DocumentNumber', Value: '12123' },
+            { Key: 'DocumentDate', Value: '20.04.2023' },
+          ],
+        },
+      ],
+    );
+
     return {
       messageId: updResult.MessageId,
+      copyMessageId: updCopyResult.MessageId,
       updNumber,
-      boxId: dto.sailerBoxId,
+      boxId: updResult.FromBoxId,
     };
   }
 
-  async createUpdBayer(dto: IUtData): Promise<IOnecCreateResultData> {
+  async createUpdBayer(dto: Bid): Promise<IOnecCreateResultReportData> {
     const updNumber = String(Math.floor(Math.random() * 10_000));
-    const upd = this.createUpdOur(dto, updNumber, dto.bayerFnsParticipantId);
-    const updResult = await this.diadoc.sendUpd(
-      upd,
-      dto.bayerBoxId,
+    const reportNumber = String(Math.floor(Math.random() * 10_000));
+    const upd = this.createUpdOurForSailer(dto, updNumber);
+    const buff = await readFile('./Report.pdf');
+    const docsResult = await this.diadoc.sendDocs(
+      this.ourReq.BoxId,
       dto.sailerBoxId,
-      'Упд от нас поставщику',
+      [
+        {
+          NeedReceipt: true,
+          NeedRecipientSignature: true,
+          TypeNamedId: 'UniversalTransferDocument',
+          Function: 'СЧФ',
+          Version: 'utd820_05_01_02_hyphen',
+          Comment: 'УПД для покупателя отправляться будет от БИАЙТЕХ',
+          SignedContent: {
+            Content: encodeWinToBase64(serializeXml(upd)),
+            SignWithTestSignature: true,
+          },
+        },
+        {
+          NeedReceipt: true,
+          NeedRecipientSignature: true,
+          TypeNamedId: 'Nonformalized',
+          Comment: 'Отчёт агента для поставщика отправляться будет от БИАЙТЕХ',
+          SignedContent: {
+            Content: buffToBase64(buff),
+            SignWithTestSignature: true,
+          },
+          Metadata: [
+            { Key: 'FileName', Value: 'Отчёт агента.pdf' },
+            { Key: 'DocumentNumber', Value: reportNumber },
+            { Key: 'DocumentDate', Value: '20.04.2023' },
+          ],
+        },
+      ],
     );
     return {
-      messageId: updResult.MessageId,
+      messageId: docsResult.MessageId,
       updNumber,
-      boxId: dto.sailerBoxId,
+      reportNumber,
+      boxId: docsResult.FromBoxId,
     };
   }
 }

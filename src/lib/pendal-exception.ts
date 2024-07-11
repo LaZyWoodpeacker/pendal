@@ -11,3 +11,12 @@ export class PendalException extends Error {
     super(message);
   }
 }
+
+export class PendalTaskException extends Error {
+  constructor(
+    message: string,
+    readonly info: Object | null = null,
+  ) {
+    super(message);
+  }
+}

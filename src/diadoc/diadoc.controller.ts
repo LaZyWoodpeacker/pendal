@@ -5,8 +5,13 @@ import { DiadocService } from './diadoc.service';
 export class DiadocController {
   constructor(private diadoc: DiadocService) {}
 
+  @Get('doctypes')
+  getDocTypes() {
+    return this.diadoc.getDocumentTypes();
+  }
+
   @Get(':inn')
   findByInn(@Param('inn') inn: string) {
-    return this.diadoc.GetOrganization(inn);
+    return this.diadoc.getOrganization(inn);
   }
 }

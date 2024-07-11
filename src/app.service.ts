@@ -6,6 +6,8 @@ import { TaskType } from './task/types/type.task';
 import { PendalLogger } from './pendal-logger/pendal-logger.service';
 import { IBid, IPay } from './types/invoce';
 import { BidService } from './bid/bid.service';
+import createPayBid from './task/methods/createPayBid';
+import createBid from './task/methods/createBid';
 
 @Injectable()
 export class AppService {
@@ -18,23 +20,13 @@ export class AppService {
   async createBid(dto: IBid): Promise<Task> {
     const bid = await this.bids.create(dto);
     this.bids.logBid(bid, `Создана заявка`);
-    const task = await this.taskService.create({
-      bidId: dto.bidId,
-      data: JSON.stringify(dto),
-      type: TaskType.NewBid,
-      status: TaskState.New,
-    });
+    const task = await createBid(dto);
     return task;
   }
 
   async payBid(dto: IPay) {
     try {
-      const task = await this.taskService.create({
-        bidId: dto.bidId,
-        data: JSON.stringify(dto),
-        type: TaskType.CheckPay,
-        status: TaskState.New,
-      });
+      const task = await createPayBid(dto);
       this.logger.log(`Оплата по заявке ${dto.bidId} создана `);
       return task;
     } catch (e) {}
