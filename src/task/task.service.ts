@@ -20,7 +20,6 @@ import createBayerSignCheck from './methods/createBayerSignCheck';
 import createSendToOnec from './methods/createSendToOnec';
 import createSailerSignCheck from './methods/createSailerSignCheck';
 import createDealFinished from './methods/createDealFinished';
-import checkReadyDocumentState from './helpers/checkReadyDocumentState';
 
 @Injectable()
 export class TaskService {
