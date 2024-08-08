@@ -7,13 +7,16 @@ interface IBankAccount {
 
 interface IProduct {
   name: string;
-  quantity: number;
-  price: number;
-  nds: number | null;
+  quantity: string;
+  price: string;
+  nds: string | null;
+  aks: string | null;
 }
 
 export interface IBid {
   bidId: string;
+  payment: string;
+  shipping: string;
   seller: {
     name: string;
     inn: string;

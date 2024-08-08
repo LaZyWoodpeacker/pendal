@@ -7,6 +7,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { BidModule } from 'src/bid/bid.module';
 import { DiadocModule } from 'src/diadoc/diadoc.module';
 import { OnecModule } from 'src/onec/onec.module';
+import { ExtendWebSocketGateway } from 'src/websocket.gateway';
 
 @Module({
   imports: [
@@ -17,7 +18,7 @@ import { OnecModule } from 'src/onec/onec.module';
     OnecModule,
   ],
   controllers: [TaskController],
-  providers: [TaskService],
+  providers: [TaskService, ExtendWebSocketGateway],
   exports: [TaskService],
 })
 export class TaskModule {}

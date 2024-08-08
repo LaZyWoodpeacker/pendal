@@ -20,6 +20,7 @@ import createBayerSignCheck from './methods/createBayerSignCheck';
 import createSendToOnec from './methods/createSendToOnec';
 import createSailerSignCheck from './methods/createSailerSignCheck';
 import createDealFinished from './methods/createDealFinished';
+import { ExtendWebSocketGateway } from 'src/websocket.gateway';
 
 @Injectable()
 export class TaskService {
@@ -28,6 +29,7 @@ export class TaskService {
     readonly bids: BidService,
     readonly diadoc: DiadocService,
     readonly logger: PendalLogger,
+    readonly message: ExtendWebSocketGateway,
   ) {}
 
   async checkTask(task: Task) {
@@ -79,19 +81,19 @@ export class TaskService {
           return;
         }
         bid.payDocNumber = JSON.parse(task.data).payDoc;
-        const data = await sendBidToUT(bid);
-        bid.bayerMessageId = data.messageId;
-        bid.bayerUpdNumber = data.updNumber;
-        await bid.save();
-        createBayerSignCheck(bid, data);
-        await task.destroy();
-        logTaskObj(
-          this,
-          task,
-          data,
-          `Отправляем данные об оплате и заявку в УТ `,
-        );
-        writeBid(bid);
+        // const data = await sendBidToUT(bid);
+        // bid.bayerMessageId = data.messageId;
+        // bid.bayerUpdNumber = data.updNumber;
+        // await bid.save();
+        // createBayerSignCheck(bid, data);
+        // await task.destroy();
+        // logTaskObj(
+        //   this,
+        //   task,
+        //   data,
+        //   `Отправляем данные об оплате и заявку в УТ `,
+        // );
+        // writeBid(bid);
       } else if (task.type === TaskType.CheckDiadocBayer) {
         const data: IOnecCreateResultData = JSON.parse(task.data);
         const bid = await this.bids.findOne(task.bidId);
@@ -202,6 +204,11 @@ export class TaskService {
         const tasks = await Task.findAll();
         for (const task of tasks) {
           await this.checkTask(task);
+        }
+        if (this.message.server.clients.size) {
+          this.message.server.clients.forEach((c) => {
+            c.send(JSON.stringify({ event: 'timer', data: Date.now() }));
+          });
         }
       } catch (e) {
         this.logger.errorJson(`Ошибка в обработке цикла задач`, e);

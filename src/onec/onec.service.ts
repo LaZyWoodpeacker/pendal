@@ -7,11 +7,17 @@ import {
   IOnecCreateResultData,
   IOnecCreateResultReportData,
 } from './types/ut-create-data';
-import { readFile } from 'fs/promises';
+import { readFile, writeFile } from 'fs/promises';
 import getMyReq, { IOurReq } from 'src/lib/get-my-req';
-import { encodeWinToBase64, buffToBase64 } from './helpers/iconvHelpers';
+import {
+  encodeWinToBase64,
+  buffToBase64,
+  encodeUtfToWin,
+} from './helpers/iconvHelpers';
 import { IMessage } from 'src/diadoc/diadocapi/types/Message';
 import { Bid } from 'src/bid/entities/bid.entity';
+import { signByOpenSsl } from 'src/lib/signByOpenSsl';
+import { signStringToBase64 } from './helpers/signBufferFile';
 
 @Injectable()
 export class OnecService {
@@ -269,7 +275,9 @@ export class OnecService {
   async createUpdSailer(dto: Bid): Promise<IOnecCreateResultData> {
     const updNumber = String(Math.floor(Math.random() * 10_000));
     const upd = this.createUpdOur(dto, updNumber);
-    const updBase64 = encodeWinToBase64(serializeXml(upd));
+    const [updBase64, signatureBase64] = await signStringToBase64(
+      encodeUtfToWin(serializeXml(upd)),
+    );
     const updResult = await this.diadoc.sendDocs(
       this.ourReq.BoxId,
       dto.bayerBoxId,
@@ -283,7 +291,8 @@ export class OnecService {
           Comment: 'УПД для покупателя отправляться будет от БИАЙТЕХ',
           SignedContent: {
             Content: updBase64,
-            SignWithTestSignature: true,
+            // SignWithTestSignature: true,
+            Signature: signatureBase64,
           },
         },
       ],
@@ -325,6 +334,12 @@ export class OnecService {
     const reportNumber = String(Math.floor(Math.random() * 10_000));
     const upd = this.createUpdOurForSailer(dto, updNumber);
     const buff = await readFile('./Report.pdf');
+    const [updBase64, signatureBase64] = await signStringToBase64(
+      encodeUtfToWin(serializeXml(upd)),
+    );
+    const [reportBase64, reportSignatureBase64] =
+      await signStringToBase64(buff);
+
     const docsResult = await this.diadoc.sendDocs(
       this.ourReq.BoxId,
       dto.sailerBoxId,
@@ -337,8 +352,9 @@ export class OnecService {
           Version: 'utd820_05_01_02_hyphen',
           Comment: 'УПД для покупателя отправляться будет от БИАЙТЕХ',
           SignedContent: {
-            Content: encodeWinToBase64(serializeXml(upd)),
-            SignWithTestSignature: true,
+            Content: updBase64,
+            Signature: signatureBase64,
+            // SignWithTestSignature: true,
           },
         },
         {
@@ -347,8 +363,9 @@ export class OnecService {
           TypeNamedId: 'Nonformalized',
           Comment: 'Отчёт агента для поставщика отправляться будет от БИАЙТЕХ',
           SignedContent: {
-            Content: buffToBase64(buff),
-            SignWithTestSignature: true,
+            Content: reportBase64,
+            Signature: reportSignatureBase64,
+            // SignWithTestSignature: true,
           },
           Metadata: [
             { Key: 'FileName', Value: 'Отчёт агента.pdf' },

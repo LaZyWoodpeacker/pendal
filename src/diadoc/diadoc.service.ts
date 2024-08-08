@@ -55,7 +55,7 @@ export class DiadocService extends DiadocApiCore {
     const message: IMessageToPost = {
       ToBoxId,
       FromBoxId,
-      DelaySend: false,
+      DelaySend: true,
       DocumentAttachments,
     };
     const result = await PostMessage(this, null, message);
